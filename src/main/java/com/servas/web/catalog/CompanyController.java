@@ -24,7 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 @CrossOrigin(origins = "*")
 @RestController
-@RequestMapping("/companies")
+@RequestMapping("/api/companies")
 @RequiredArgsConstructor
 public class CompanyController {
 
