@@ -21,7 +21,7 @@ import tools.jackson.databind.annotation.JsonNaming;
 
 @CrossOrigin(origins = "*")
 @RestController
-@RequestMapping("/auth")
+@RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthController {
 
