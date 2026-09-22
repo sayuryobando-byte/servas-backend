@@ -1,5 +1,6 @@
 package com.servas.config;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -24,12 +25,27 @@ public class SecurityBeansConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
-        @Value("${app.cors.allowed-origins}") List<String> allowedOrigins) {
+        @Value("${app.cors.allowed-origins:https://servas-frontend.vercel.app,http://localhost:5173}") List<String> allowedOrigins) {
+        
         var configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(allowedOrigins);
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));
+        
+        // Copiamos la lista para modificarla de forma segura
+        List<String> origins = new ArrayList<>(allowedOrigins != null ? allowedOrigins : List.of());
+        
+        // Aseguramos que la URL de producción en Vercel esté incluida
+        if (!origins.contains("https://servas-frontend.vercel.app")) {
+            origins.add("https://servas-frontend.vercel.app");
+        }
+        if (!origins.contains("http://localhost:5173")) {
+            origins.add("http://localhost:5173");
+        }
+
+        configuration.setAllowedOrigins(origins);
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Authorization", "Content-Type"));
         configuration.setMaxAge(3600L);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
