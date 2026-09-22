@@ -1,0 +1,440 @@
+# ============================================================================
+# Servas Backend — Flujo de pruebas funcionales (archivo .http)
+# ============================================================================
+# Herramientas: IntelliJ IDEA (HTTP Client), VS Code (extension REST Client),
+# CLion / cualquier cliente compatible con el formato .http.
+#
+# Requisitos: backend levantado (ver GETTING-STARTED.md) con SEED_ENABLED=true
+# (servicios `db`, `redis` y `app` del docker-compose).
+#
+# ORDEN DE EJECUCION (los pasos numerados se encadenan con variables):
+#   Paso 0 (opcional)  - Health check
+#   Paso 1             - GET  /comunas
+#   Paso 2             - GET  /services                     (catalogo publico)
+#   Paso 3             - POST /auth/login                   (token -> variable)
+#   Paso 4             - POST /companies                    (empresa del proveedor)
+#   Paso 5             - POST /services                     (servicio de prueba)
+#   Paso 6             - POST /services/{id}/schedules      (horario Lunes)
+#   Paso 7             - GET  /services/{id}/availability   (fecha Lunes)
+#   Paso 8             - POST /reservations                 (crear reserva)
+#   Paso 9             - GET  /reservations/client/{doc}    (consultar por doc)
+#   Paso 10            - GET  /reservations/{id}            (detalle)
+#   Paso 11            - PUT  /reservations/{id}            (modificar)
+#   Paso 12            - PATCH /reservations/{id}/cancel    (cancelar)
+#   Paso 13            - POST /blocked-dates                (bloquear fecha)
+#   Paso 14            - GET  /provider/reservations        (agenda proveedor)
+#   Paso 15            - GET  /reports/*                    (reportes)
+#   Paso 16            - POST /auth/logout
+#   Paso extra (opcional): POST /auth/register + verify-email con OTP.
+#
+# Nota de fechas: el ejemplo usa el lunes 2026-09-21 (dia 1). Si lo ejecutas
+# mas tarde, ajusta reserva/availability a un PROXIMO LUNES y verifica que este
+# dentro del rango start_date/end_date del servicio (01-09-2026 a 31-12-2026).
+# ============================================================================
+
+@baseUrl = http://localhost:8080
+
+# ---------------------------------------------------------------------------
+# Paso 0 — Health check (opcional)
+# ---------------------------------------------------------------------------
+### 0.1 Health
+GET {{baseUrl}}/actuator/health
+
+### 0.2 Readiness
+GET {{baseUrl}}/actuator/health/readiness
+
+# ---------------------------------------------------------------------------
+# Paso 1 — Catalogo publico: comunas
+# ---------------------------------------------------------------------------
+### 1.1 Listar comunas
+GET {{baseUrl}}/comunas
+
+> {%
+    const comuna = response.body.find(c => c.name === "Providencia") || response.body [0];
+    client.global.set("comunaId", comuna ? comuna.id : 1);
+    client.test("comunas OK", () => client.assert(response.status === 200));
+%}
+
+# ---------------------------------------------------------------------------
+# Paso 2 — Catalogo publico: buscar servicios
+# ---------------------------------------------------------------------------
+### 2.1 Buscar servicios (todos los activos)
+GET {{baseUrl}}/services
+
+### 2.2 Buscar servicios VIRTUALES
+GET {{baseUrl}}/services?modality=VIRTUAL
+
+### 2.3 Detalle de un servicio activo
+GET {{baseUrl}}/services/{{serviceId}}
+
+> {%
+    client.test("detalle 200", () => client.assert(response.status === 200));
+%}
+
+# ---------------------------------------------------------------------------
+# Paso 3 — Autenticacion: login proveedor de demo (ya verificado por el seeder)
+#   proveedor1@demo.servas / Demo1234!
+# ---------------------------------------------------------------------------
+### 3.1 Login proveedor demo
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "proveedor1@demo.servas",
+  "password": "Demo1234!"
+}
+
+> {%
+    client.global.set("token", response.body.token);
+    client.global.set("userId", response.body.user_id);
+    client.test("login OK", () => client.assert(response.status === 200));
+%}
+
+### 3.2 Login con credenciales invalidas (deberia dar 401)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "proveedor1@demo.servas",
+  "password": "clave-incorrecta"
+}
+
+### 3.3 Login de proveedor NO verificado (deberia dar 403)
+# proveedor5@demo.servas tiene is_verified=false (ver seeder)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "proveedor5@demo.servas",
+  "password": "Demo1234!"
+}
+
+# ---------------------------------------------------------------------------
+# Paso 4 — Proveedor autenticado: crear empresa
+#   (multipart/form-data; el NIT se genera unico con {{$timestamp}})
+# ---------------------------------------------------------------------------
+### 4.1 Crear empresa
+POST {{baseUrl}}/companies
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=ServasBoundary
+
+--ServasBoundary
+Content-Disposition: form-data; name="nit"
+
+902{{$timestamp}}
+--ServasBoundary
+Content-Disposition: form-data; name="name"
+
+Estetica Aura Test
+--ServasBoundary
+Content-Disposition: form-data; name="description"
+
+Empresa de prueba creada via .http
+--ServasBoundary
+Content-Disposition: form-data; name="address"
+
+Av. Providencia 1234
+--ServasBoundary
+Content-Disposition: form-data; name="social_media"
+
+@esteticaauratest
+--ServasBoundary--
+
+> {%
+    client.global.set("companyId", response.body.id);
+    client.test("empresa creada (201)", () => client.assert(response.status === 201));
+%}
+
+# ---------------------------------------------------------------------------
+# Paso 5 — Proveedor autenticado: crear servicio en su empresa
+# ---------------------------------------------------------------------------
+### 5.1 Crear servicio (presencial, comuna Providencia)
+POST {{baseUrl}}/services
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "company_id": "{{companyId}}",
+  "comuna_id": 1,
+  "name": "Spa Relax 360",
+  "modality": "PRESENCIAL",
+  "cost": 45000.00,
+  "duration_minutes": 60,
+  "description": "Masaje de relajacion completo",
+  "recommendations": "Llegar 10 minutos antes de la cita",
+  "start_date": "2026-09-01",
+  "end_date": "2026-12-31"
+}
+
+> {%
+    client.global.set("serviceId", response.body.id);
+    client.test("servicio creado (201)", () => client.assert(response.status === 201));
+%}
+
+### 5.2 Crear servicio presencial SIN comuna (deberia dar 400 COMUNA_REQUIRED)
+POST {{baseUrl}}/services
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "company_id": "{{companyId}}",
+  "comuna_id": null,
+  "name": "Servicio sin comuna",
+  "modality": "PRESENCIAL",
+  "cost": 10000.00,
+  "duration_minutes": 30
+}
+
+# ---------------------------------------------------------------------------
+# Paso 6 — Proveedor autenticado: configurar horario (Lunes 09:00-11:00)
+# ---------------------------------------------------------------------------
+### 6.1 Configurar horarios
+POST {{baseUrl}}/services/{{serviceId}}/schedules
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+[
+  { "day_of_week": 1, "start_time": "09:00", "end_time": "11:00" }
+]
+
+> {%
+    client.test("horarios configurados (201)", () => client.assert(response.status === 201));
+%}
+
+### 6.2 Configurar horarios invalidos solapados (deberia dar 400 INVALID_SCHEDULE)
+POST {{baseUrl}}/services/{{serviceId}}/schedules
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+[
+  { "day_of_week": 1, "start_time": "09:00", "end_time": "11:00" },
+  { "day_of_week": 1, "start_time": "10:00", "end_time": "12:00" }
+]
+
+# ---------------------------------------------------------------------------
+# Paso 7 — Disponibilidad del servicio (Lunes 2026-09-21)
+# ---------------------------------------------------------------------------
+### 7.1 Franjas disponibles
+GET {{baseUrl}}/services/{{serviceId}}/availability?date=2026-09-21
+
+> {%
+    client.test("disponibilidad OK", () => client.assert(response.status === 200 && response.body.length > 0));
+%}
+
+### 7.2 Disponibilidad en dia sin horario (Lunes no es 2026-09-22 martes)
+# Martes 2026-09-22 no tiene horario -> SERVICE_WITHOUT_SCHEDULE
+GET {{baseUrl}}/services/{{serviceId}}/availability?date=2026-09-22
+
+# ---------------------------------------------------------------------------
+# Paso 8 — Crear reserva (cliente final, dato publico)
+#   La franja es 09:00-10:00 (start + duration=60min)
+# ---------------------------------------------------------------------------
+### 8.1 Crear reserva
+POST {{baseUrl}}/reservations
+Content-Type: application/json
+
+{
+  "service_id": "{{serviceId}}",
+  "reservation_date": "2026-09-21",
+  "start_time": "09:00",
+  "end_time": "10:00",
+  "client": {
+    "document_type": "CC",
+    "document_number": "1122334455",
+    "first_name": "Sofia",
+    "last_name": "Rojas",
+    "phone": "3205550123",
+    "email": "sofia.rojas@mail.com"
+  }
+}
+
+> {%
+    client.global.set("reservationId", response.body.id);
+    client.test("reserva creada (201)", () => client.assert(response.status === 201));
+%}
+
+### 8.2 Reserva con end_time incorrecto (deberia dar 400 END_TIME_MISMATCH)
+POST {{baseUrl}}/reservations
+Content-Type: application/json
+
+{
+  "service_id": "{{serviceId}}",
+  "reservation_date": "2026-09-21",
+  "start_time": "09:00",
+  "end_time": "11:00",
+  "client": {
+    "document_type": "CC",
+    "document_number": "9988776655",
+    "first_name": "Otro",
+    "last_name": "Cliente",
+    "phone": "3205550999",
+    "email": "otro.cliente@mail.com"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Paso 9 — Consultar reservas por documento del cliente
+# ---------------------------------------------------------------------------
+### 9.1 Reservas de Sofia Rojas (documento 1122334455)
+GET {{baseUrl}}/reservations/client/1122334455
+
+# ---------------------------------------------------------------------------
+# Paso 10 — Detalle de la reserva
+# ---------------------------------------------------------------------------
+### 10.1 Detalle de reserva
+GET {{baseUrl}}/reservations/{{reservationId}}
+
+# ---------------------------------------------------------------------------
+# Paso 11 — Modificar reserva (al proximo Lunes 2026-09-28, 10:00-11:00)
+# ---------------------------------------------------------------------------
+### 11.1 Modificar reserva
+PUT {{baseUrl}}/reservations/{{reservationId}}
+Content-Type: application/json
+
+{
+  "reservation_date": "2026-09-28",
+  "start_time": "10:00",
+  "end_time": "11:00"
+}
+
+> {%
+    client.test("reserva modificada (200)", () => client.assert(response.status === 200));
+%}
+
+# ---------------------------------------------------------------------------
+# Paso 12 — Cancelar reserva
+# ---------------------------------------------------------------------------
+### 12.1 Cancelar reserva
+PATCH {{baseUrl}}/reservations/{{reservationId}}/cancel
+Content-Type: application/json
+
+{
+  "cancelled_by": "CLIENT",
+  "cancellation_reason": "Cambio de planes"
+}
+
+> {%
+    client.test("reserva cancelada (200)", () => client.assert(response.status === 200));
+    client.global.set("reservationId", response.body.id);
+%}
+
+### 12.2 Modificar reserva cancelada (deberia dar 400 RESERVATION_NOT_ACTIVE)
+PUT {{baseUrl}}/reservations/{{reservationId}}
+Content-Type: application/json
+
+{
+  "reservation_date": "2026-10-05",
+  "start_time": "09:00",
+  "end_time": "10:00"
+}
+
+# ---------------------------------------------------------------------------
+# Paso 13 — Proveedor autenticado: bloquear fecha (Sabado sin horario)
+# ---------------------------------------------------------------------------
+### 13.1 Bloquear fecha para la empresa
+POST {{baseUrl}}/blocked-dates
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "company_id": "{{companyId}}",
+  "service_id": null,
+  "block_date": "2026-09-26",
+  "reason": "Vacaciones de la empresa"
+}
+
+> {%
+    client.test("fecha bloqueada (201)", () => client.assert(response.status === 201));
+%}
+
+# ---------------------------------------------------------------------------
+# Paso 14 — Agenda del proveedor
+# ---------------------------------------------------------------------------
+### 14.1 Agenda completa
+GET {{baseUrl}}/provider/reservations
+Authorization: Bearer {{token}}
+
+### 14.2 Agenda filtrada por estado
+GET {{baseUrl}}/provider/reservations?status=CONFIRMED
+Authorization: Bearer {{token}}
+
+### 14.3 Agenda por fecha (2026-09-21)
+GET {{baseUrl}}/provider/reservations?date=2026-09-21
+Authorization: Bearer {{token}}
+
+# ---------------------------------------------------------------------------
+# Paso 15 — Reportes del proveedor
+# ---------------------------------------------------------------------------
+### 15.1 Reporte de reservas por estado
+GET {{baseUrl}}/reports/reservations
+Authorization: Bearer {{token}}
+
+### 15.2 Reporte de ocupacion por servicio
+GET {{baseUrl}}/reports/occupancy
+Authorization: Bearer {{token}}
+
+### 15.3 Reporte de demanda (top 10)
+GET {{baseUrl}}/reports/demand
+Authorization: Bearer {{token}}
+
+# ---------------------------------------------------------------------------
+# Paso 16 — Cerrar sesion
+# ---------------------------------------------------------------------------
+### 16.1 Logout
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{token}}
+
+### 16.2 Verificar que el token ya no sirve (deberia dar 401 AUTH_REQUIRED)
+# Nota: tras logout el token fue revocado en Redis; si Redis persiste,
+# el siguiente POST devuelve 401 TOKEN_INVALID.
+GET {{baseUrl}}/provider/reservations
+Authorization: Bearer {{token}}
+
+# ============================================================================
+# PASO EXTRA (opcional) — Registro de nuevo proveedor con verificacion OTP
+#
+# La app NO envia emails (no hay SMTP). El OTP se lee de los logs:
+#   1. Ejecuta POST /auth/register (email unico, se genera con {{$timestamp}})
+#   2. Lee el OTP en el log:  docker compose -f back/docker-compose.yml logs app
+#      Busca "OTP" / los logs de OtpService con nivel DEBUG de com.servas.
+#   3. (Alternativa) Lee el codigo directo de Redis:
+#      docker exec servas-redis redis-cli GET "otp:email:<EMAIL>"
+#   4. Sustituye {{otpCode}} en el Paso EX-2 y ejecuta verify-email.
+# ============================================================================
+
+### EX-1 Registrar nuevo proveedor
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "nuevo.proveedor.{{$timestamp}}@demo.servas",
+  "password": "Demo1234!",
+  "document_type": "CC",
+  "document_number": "{{$timestamp}}",
+  "first_name": "Nuevo",
+  "last_name": "Proveedor",
+  "birth_date": "1992-03-15",
+  "phone": "3115559900"
+}
+
+> {%
+    client.global.set("otpEmail", response.body.email);
+    client.test("registro OK (201)", () => client.assert(response.status === 201));
+%}
+
+### Ex-2 Verificar email con OTP (sustituir {{otpCode}} por el valor leido del log/redis)
+POST {{baseUrl}}/auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "{{otpEmail}}",
+  "otp_code": "{{otpCode:000000}}"
+}
+
+### Ex-3 Reenviar OTP (emite un nuevo codigo)
+POST {{baseUrl}}/auth/verify-email/resend
+Content-Type: application/json
+
+{
+  "email": "{{otpEmail}}"
+}

@@ -1,0 +1,28 @@
+# Vector: recoge los logs del contenedor servas-app y los envia a VictoriaLogs.
+# Requiere montar /var/run/docker.sock (acceso de solo lectura).
+
+data_dir = "/var/lib/vector"
+
+[api]
+enabled = true
+address = "0.0.0.0:8686"
+playground = false
+
+[sources.app_logs]
+type = "docker_logs"
+include_containers = ["servas-app"]
+
+[transforms.app_logs_clean]
+type = "remap"
+inputs = ["app_logs"]
+source = '''
+    .container = "servas-app"
+  '''
+
+[sinks.victorialogs]
+type = "loki"
+inputs = ["app_logs_clean"]
+endpoint = "http://victorialogs:9428/insert"
+encoding.codec = "text"
+labels = { job = "servas-app", container = "servas-app" }
+healthcheck.enabled = false

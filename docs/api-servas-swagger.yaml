@@ -1,0 +1,516 @@
+openapi: 3.2.0
+info:
+  title: API Reserva de Servicios
+  description: Especificación alineada al plan de trabajo oficial y las Historias de Usuario (HU-001 a HU-040).
+  version: 1.0.0
+paths:
+
+  # ==========================================
+  # ÉPICA 1: ACCESO Y GESTIÓN DE USUARIOS
+  # ==========================================
+  /auth/register:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Registro de proveedor (HU-001)
+      description: Crea la cuenta de usuario y el perfil del proveedor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, document_type, document_number, first_name, last_name, phone]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                document_type: { type: string, enum: [CC, TI, CE, PASSPORT, OTRO] }
+                document_number: { type: string }
+                first_name: { type: string }
+                last_name: { type: string }
+                phone: { type: string }
+                birth_date: { type: string, format: date }
+      responses:
+        '201': { description: Proveedor registrado exitosamente. El código OTP se envía por email. }
+
+  /auth/verify-email:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Verificación de correo vía OTP en Caché (HU-002)
+      description: Valida el código temporal almacenado en Redis/RAM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp_code]
+              properties:
+                email: { type: string, format: email }
+                otp_code: { type: string, example: "583920" }
+      responses:
+        '200': { description: Cuenta verificada exitosamente. }
+        '400': { description: Código inválido, expirado o superó el máximo de 3 intentos. }
+
+  /auth/login:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Iniciar sesión del proveedor (HU-004)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: Token de sesión generado (Bearer JWT). }
+
+  /auth/logout:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Cerrar sesión activa del proveedor (HU-005)
+      description: Invalida el token de sesión vigente.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Sesión cerrada y token invalidado. }
+
+  /auth/verify-email/resend:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Solicitar nuevo código de verificación (HU-002)
+      description: Genera y envía un nuevo OTP. El código anterior deja de ser válido.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Nuevo código enviado al correo. }
+
+  /auth/forgot-password:
+    post:
+      tags: [Autenticación & Proveedores]
+      summary: Recuperación de contraseña (HU-006)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Instrucciones o token de recuperación enviado al correo. }
+
+  /companies:
+    post:
+      tags: [Compañías & Negocios]
+      summary: Registrar negocio (HU-003)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [nit, name, address]
+              properties:
+                nit: { type: string }
+                name: { type: string }
+                description: { type: string }
+                address: { type: string }
+                social_media: { type: string }
+                logo: { type: string, format: binary }
+      responses:
+        '201': { description: Compañía creada. }
+
+  /companies/{id}:
+    put:
+      tags: [Compañías & Negocios]
+      summary: Editar datos del negocio (HU-003)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                address: { type: string }
+                social_media: { type: string }
+                logo: { type: string, format: binary }
+      responses:
+        '200': { description: Negocio actualizado. }
+
+  # ==========================================
+  # ÉPICA 2: CATÁLOGO DE SERVICIOS
+  # ==========================================
+  /comunas:
+    get:
+      tags: [Maestros & Catálogo]
+      summary: Listar comunas de Medellín (HU-008)
+      responses:
+        '200': { description: Listado maestro de comunas. }
+
+  /services:
+    get:
+      tags: [Maestros & Catálogo]
+      summary: Consultar catálogo público de servicios (HU-007, HU-008)
+      parameters:
+        - name: comuna_id
+          in: query
+          schema: { type: integer }
+        - name: modality
+          in: query
+          schema: { type: string, enum: [VIRTUAL, PRESENCIAL] }
+        - name: company_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Lista de servicios disponibles con costo, modalidad, marca y comuna. }
+
+    post:
+      tags: [Maestros & Catálogo]
+      summary: Registrar servicio (HU-009, HU-013)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [company_id, comuna_id, name, modality, cost, duration_minutes]
+              properties:
+                company_id: { type: string, format: uuid }
+                comuna_id: { type: integer }
+                name: { type: string }
+                modality: { type: string, enum: [VIRTUAL, PRESENCIAL] }
+                cost: { type: number }
+                duration_minutes: { type: integer }
+                description: { type: string }
+                recommendations: { type: string }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+      responses:
+        '201': { description: Servicio creado. }
+
+  /services/{id}:
+    get:
+      tags: [Maestros & Catálogo]
+      summary: Consultar detalle del servicio (HU-008, HU-009)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Detalle completo con recomendaciones, modalidad y marca. }
+
+    put:
+      tags: [Maestros & Catálogo]
+      summary: Modificar información de un servicio (HU-011)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comuna_id: { type: integer, description: "Obligatorio si la modalidad es PRESENCIAL." }
+                name: { type: string }
+                modality: { type: string, enum: [VIRTUAL, PRESENCIAL] }
+                cost: { type: number }
+                duration_minutes: { type: integer }
+                description: { type: string }
+                recommendations: { type: string }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+                is_active: { type: boolean }
+      responses:
+        '200': { description: Servicio actualizado. }
+
+  /services/{id}/status:
+    patch:
+      tags: [Maestros & Catálogo]
+      summary: Activar o desactivar servicio (HU-012)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              properties:
+                is_active: { type: boolean }
+      responses:
+        '200': { description: Estado del servicio actualizado. }
+
+  # ==========================================
+  # ÉPICA 3: GESTIÓN DE AGENDAS Y DISPONIBILIDAD
+  # ==========================================
+  /services/{id}/schedules:
+    post:
+      tags: [Agendas & Disponibilidad]
+      summary: Configurar días y horarios de atención (HU-014, HU-015)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [day_of_week, start_time, end_time]
+                properties:
+                  day_of_week: { type: integer, example: 2 } # 1=Lunes, 2=Martes...
+                  start_time: { type: string, example: "09:00" }
+                  end_time: { type: string, example: "16:00" }
+      responses:
+        '201': { description: Horarios de atención guardados. }
+
+    put:
+      tags: [Agendas & Disponibilidad]
+      summary: Modificar días y horarios de atención (HU-016)
+      description: Reemplaza la configuración de horarios existente por la nueva lista.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [day_of_week, start_time, end_time]
+                properties:
+                  day_of_week: { type: integer, example: 2 } # 1=Lunes, 2=Martes...
+                  start_time: { type: string, example: "09:00" }
+                  end_time: { type: string, example: "16:00" }
+      responses:
+        '200': { description: Horarios de atención actualizados. }
+
+  /services/{id}/availability:
+    get:
+      tags: [Agendas & Disponibilidad]
+      summary: Calendario y franjas horarias disponibles (HU-018, HU-019, HU-020)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Horarios disponibles calculados automáticamente tras evaluar bloqueos y reservas. }
+
+  /blocked-dates:
+    post:
+      tags: [Agendas & Disponibilidad]
+      summary: Bloquear fechas por empresa o servicio específico (HU-017)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [company_id, block_date]
+              properties:
+                company_id: { type: string, format: uuid }
+                service_id: { type: string, format: uuid, description: "Opcional. Si se omite, bloquea toda la empresa." }
+                block_date: { type: string, format: date }
+                reason: { type: string }
+      responses:
+        '201': { description: Fecha bloqueada correctamente. }
+
+  # ==========================================
+  # ÉPICA 4, 5 Y 6: RESERVAS
+  # ==========================================
+  /reservations:
+    post:
+      tags: [Reservas]
+      summary: Crear y confirmar reserva ingresando datos del cliente (HU-021 a HU-029)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service_id, reservation_date, start_time, end_time, client]
+              properties:
+                service_id: { type: string, format: uuid }
+                reservation_date: { type: string, format: date }
+                start_time: { type: string, example: "10:00" }
+                end_time: { type: string, example: "10:30" }
+                client:
+                  type: object
+                  required: [document_type, document_number, first_name, last_name, phone, email]
+                  properties:
+                    document_type: { type: string, enum: [CC, TI, CE, PASSPORT] }
+                    document_number: { type: string }
+                    first_name: { type: string }
+                    last_name: { type: string }
+                    phone: { type: string }
+                    email: { type: string, format: email }
+      responses:
+        '201': { description: Reserva registrada. Retorna la confirmación y previene sobrecupos (HU-037). }
+
+  /reservations/client/{documentNumber}:
+    get:
+      tags: [Reservas]
+      summary: Consultar reservas activas e históricas por documento de identidad (HU-025, HU-030, HU-031)
+      parameters:
+        - name: documentNumber
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Listado de reservas asociadas a la identificación. }
+
+  /reservations/{id}:
+    get:
+      tags: [Reservas]
+      summary: Consultar detalle de una reserva (HU-032)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Detalle de fecha, horario, estado y cliente. }
+
+    put:
+      tags: [Reservas]
+      summary: Modificar reserva activa (HU-033)
+      description: Proveedor autenticado o cliente validando su documento.
+      security: [{ bearerAuth: [] }, {}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reservation_date: { type: string, format: date }
+                start_time: { type: string }
+                end_time: { type: string }
+      responses:
+        '200': { description: Reserva modificada. }
+
+  /reservations/{id}/cancel:
+    patch:
+      tags: [Reservas]
+      summary: Cancelar reserva con autoría y justificación (HU-034)
+      description: Proveedor autenticado o cliente validando su documento.
+      security: [{ bearerAuth: [] }, {}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancelled_by, cancellation_reason]
+              properties:
+                cancelled_by: { type: string, enum: [CLIENT, PROVIDER] }
+                cancellation_reason: { type: string }
+      responses:
+        '200': { description: Reserva cancelada y horario liberado para la agenda. }
+
+  /provider/reservations:
+    get:
+      tags: [Reservas]
+      summary: Consultar agenda de reservas para proveedores (HU-035, HU-036)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, CONFIRMED, CANCELLED, COMPLETED] }
+        - name: date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Listado filtrado para administración del proveedor. }
+
+  # ==========================================
+  # ÉPICA 7: REPORTES
+  # ==========================================
+  /reports/reservations:
+    get:
+      tags: [Reportes]
+      summary: Reporte de reservas realizadas (HU-038)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Métricas agregadas de reservas efectuadas. }
+
+  /reports/occupancy:
+    get:
+      tags: [Reportes]
+      summary: Nivel de ocupación por horarios (HU-039)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Porcentaje de uso sobre la capacidad configurada. }
+
+  /reports/demand:
+    get:
+      tags: [Reportes]
+      summary: Servicios de mayor demanda (HU-040)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Ranking de servicios más solicitados. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

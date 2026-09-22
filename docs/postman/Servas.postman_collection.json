@@ -1,0 +1,1218 @@
+{
+  "info": {
+    "name": "Servas Backend API",
+    "description": "Colección de pruebas funcionales del backend Servas (Plataforma de Reservas de Servicios).\n\nPre-requisito: backend levantado con docker-compose (db + redis + app) y SEED_ENABLED=true.\n\nORDEN DE EJECUCIÓN (los pasos guardan variables de forma automática):\n  1. Health        -> actúa como smoke test\n  2. Catalogo      -> GET /comunas y GET /services (publico)\n  3. Auth          -> login proveedor1@demo.servas (guardar token)\n  4. Empresa       -> POST /companies (guardar companyId)\n  5. Servicios     -> POST /services (guardar serviceId)\n  6. Horarios      -> POST /services/{id}/schedules (solo Lunes 09:00-11:00)\n  7. Disponibilidad-> GET /services/{id}/availability?date=2026-09-21\n  8. Reservas      -> crear, consultar, modificar y cancelar\n  9. Bloqueadas    -> POST /blocked-dates\n  10. Agenda       -> GET /provider/reservations (con y sin filtros)\n  11. Reportes     -> /reports/reservations, /reports/occupancy, /reports/demand\n  12. Logout       -> revocar el token\n  EXTRA. Registro+OTP -> flujo de registro y verificación de email (requiere leer OTP de logs/redis)\n\nFechas de ejemplo: el servicio se configura para Lunes; la reserva usa 2026-09-21 (Lunes).\nSi se ejecuta en otra fecha, ajustar la variable 'bookingDate' a un proximo Lunes y revisar\nque este dentro del rango del servicio (01-09-2026 a 31-12-2026).\n\nEl OTP de verificación no se envia por email (no hay SMTP). Se lee de:\n  docker compose -f back/docker-compose.yml logs app\n  o directamente de Redis:\n  docker exec servas-redis redis-cli GET \"otp:email:<EMAIL>\"",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "comunaId",
+      "value": "1"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "companyId",
+      "value": ""
+    },
+    {
+      "key": "serviceId",
+      "value": ""
+    },
+    {
+      "key": "reservationId",
+      "value": ""
+    },
+    {
+      "key": "otpEmail",
+      "value": ""
+    },
+    {
+      "key": "otpCode",
+      "value": ""
+    },
+    {
+      "key": "bookingDate",
+      "value": "2026-09-21"
+    },
+    {
+      "key": "clientDocument",
+      "value": "1122334455"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "item": [
+        {
+          "name": "1.1 Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Health UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "1.2 Readiness",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health/readiness",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "readiness"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Catalogo publico",
+      "item": [
+        {
+          "name": "2.1 Listar comunas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const comuna = pm.response.json().find(c => c.name === 'Providencia');",
+                  "if (comuna) pm.collectionVariables.set('comunaId', String(comuna.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/comunas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "comunas"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.2 Buscar servicios (activos)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "if (list && list.length > 0) pm.collectionVariables.set('serviceId', list[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.3 Buscar servicios VIRTUALES",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/services?modality=VIRTUAL",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services"
+              ],
+              "query": [
+                {
+                  "key": "modality",
+                  "value": "VIRTUAL"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.4 Detalle de servicio",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Autenticación",
+      "item": [
+        {
+          "name": "3.1 Login proveedor demo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devolver token', () => pm.expect(pm.response.json().token).to.not.be.empty);",
+                  "pm.collectionVariables.set('token', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"email\": \"proveedor1@demo.servas\", \"password\": \"Demo1234!\" }"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "3.2 Login invalido (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"email\": \"proveedor1@demo.servas\", \"password\": \"clave-incorrecta\" }"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "3.3 Login proveedor NO verificado (403)",
+          "description": "proveedor5@demo.servas tiene is_verified=false según el seeder. Debe responder 403 EMAIL_NOT_VERIFIED.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"email\": \"proveedor5@demo.servas\", \"password\": \"Demo1234!\" }"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Empresa",
+      "item": [
+        {
+          "name": "4.1 Crear empresa (multipart)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('companyId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "nit",
+                  "value": "902{{$timestamp}}",
+                  "type": "text"
+                },
+                {
+                  "key": "name",
+                  "value": "Estética Aura Test",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Empresa de prueba creada via Postman",
+                  "type": "text"
+                },
+                {
+                  "key": "address",
+                  "value": "Av. Providencia 1234",
+                  "type": "text"
+                },
+                {
+                  "key": "social_media",
+                  "value": "@esteticaauratest",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Servicios",
+      "item": [
+        {
+          "name": "5.1 Crear servicio",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('serviceId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"comuna_id\": 1,\n  \"name\": \"Spa Relax 360\",\n  \"modality\": \"PRESENCIAL\",\n  \"cost\": 45000.00,\n  \"duration_minutes\": 60,\n  \"description\": \"Masaje de relajación completo\",\n  \"recommendations\": \"Llegar 10 minutos antes de la cita\",\n  \"start_date\": \"2026-09-01\",\n  \"end_date\": \"2026-12-31\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5.2 Servicio presencial sin comuna (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"comuna_id\": null,\n  \"name\": \"Servicio sin comuna\",\n  \"modality\": \"PRESENCIAL\",\n  \"cost\": 10000.00,\n  \"duration_minutes\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5.3 Desactivar servicio",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"is_active\": false }"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5.4 Reactivar servicio",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"is_active\": true }"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "status"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Horarios",
+      "item": [
+        {
+          "name": "6.1 Configurar horarios (Lunes 09:00-11:00)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  { \"day_of_week\": 1, \"start_time\": \"09:00\", \"end_time\": \"11:00\" }\n]"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/schedules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "schedules"
+              ]
+            }
+          }
+        },
+        {
+          "name": "6.2 Horarios solapados (400 INVALID_SCHEDULE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  { \"day_of_week\": 1, \"start_time\": \"09:00\", \"end_time\": \"11:00\" },\n  { \"day_of_week\": 1, \"start_time\": \"10:00\", \"end_time\": \"12:00\" }\n]"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/schedules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "schedules"
+              ]
+            }
+          }
+        },
+        {
+          "name": "6.3 Reemplazar horarios (L-V 09:00-12:00)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  { \"day_of_week\": 1, \"start_time\": \"09:00\", \"end_time\": \"12:00\" },\n  { \"day_of_week\": 2, \"start_time\": \"09:00\", \"end_time\": \"12:00\" },\n  { \"day_of_week\": 3, \"start_time\": \"09:00\", \"end_time\": \"12:00\" },\n  { \"day_of_week\": 4, \"start_time\": \"09:00\", \"end_time\": \"12:00\" },\n  { \"day_of_week\": 5, \"start_time\": \"09:00\", \"end_time\": \"12:00\" }\n]"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/schedules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "schedules"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Disponibilidad",
+      "item": [
+        {
+          "name": "7.1 Franjas disponibles (Lunes {{bookingDate}})",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Al menos una franja', () => pm.expect(pm.response.json().length).to.be.greaterThan(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/availability?date={{bookingDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "availability"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{bookingDate}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "7.2 Dia sin horario (2026-09-22 martes => SERVICE_WITHOUT_SCHEDULE)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/services/{{serviceId}}/availability?date=2026-09-22",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "services",
+                "{{serviceId}}",
+                "availability"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-09-22"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Reservas",
+      "item": [
+        {
+          "name": "8.1 Crear reserva (Sofia Rojas)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('reservationId', pm.response.json().id);",
+                  "pm.collectionVariables.set('clientDocument', pm.response.json().clientDocumentNumber);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service_id\": \"{{serviceId}}\",\n  \"reservation_date\": \"{{bookingDate}}\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"10:00\",\n  \"client\": {\n    \"document_type\": \"CC\",\n    \"document_number\": \"1122334455\",\n    \"first_name\": \"Sofia\",\n    \"last_name\": \"Rojas\",\n    \"phone\": \"3205550123\",\n    \"email\": \"sofia.rojas@mail.com\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.2 Reserva end_time incorrecto (400 END_TIME_MISMATCH)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service_id\": \"{{serviceId}}\",\n  \"reservation_date\": \"{{bookingDate}}\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"11:00\",\n  \"client\": {\n    \"document_type\": \"CC\",\n    \"document_number\": \"9988776655\",\n    \"first_name\": \"Otro\",\n    \"last_name\": \"Cliente\",\n    \"phone\": \"3205550999\",\n    \"email\": \"otro.cliente@mail.com\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.3 Reservas por documento",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reservations/client/{{clientDocument}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "client",
+                "{{clientDocument}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.4 Detalle de reserva",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.5 Modificar reserva (2026-09-28 10:00-11:00)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservation_date\": \"2026-09-28\",\n  \"start_time\": \"10:00\",\n  \"end_time\": \"11:00\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.6 Cancelar reserva",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Estado CANCELLED', () => pm.expect(pm.response.json().status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cancelled_by\": \"CLIENT\",\n  \"cancellation_reason\": \"Cambio de planes\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}",
+                "cancel"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.7 Modificar reserva cancelada (400 RESERVATION_NOT_ACTIVE)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservation_date\": \"2026-10-05\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"10:00\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Fechas bloqueadas",
+      "item": [
+        {
+          "name": "9.1 Bloquear fecha para la empresa",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": \"{{companyId}}\",\n  \"service_id\": null,\n  \"block_date\": \"2026-09-26\",\n  \"reason\": \"Vacaciones de la empresa\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/blocked-dates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "blocked-dates"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Agenda del proveedor",
+      "item": [
+        {
+          "name": "10.1 Agenda completa",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/provider/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "provider",
+                "reservations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "10.2 Agenda filtrada por estado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/provider/reservations?status=CONFIRMED",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "provider",
+                "reservations"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "CONFIRMED"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "10.3 Agenda por fecha",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/provider/reservations?date={{bookingDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "provider",
+                "reservations"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{bookingDate}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Reportes",
+      "item": [
+        {
+          "name": "11.1 Reporte de reservas por estado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "reservations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "11.2 Reporte de ocupación",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/occupancy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "occupancy"
+              ]
+            }
+          }
+        },
+        {
+          "name": "11.3 Reporte de demanda (top 10)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/demand",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "demand"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. Logout",
+      "item": [
+        {
+          "name": "12.1 Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('token', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          }
+        },
+        {
+          "name": "12.2 Agenda con token revocado (401)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/provider/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "provider",
+                "reservations"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "EXTRA. Registro + Verificación OTP",
+      "item": [
+        {
+          "name": "EX-1 Registrar nuevo proveedor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('otpEmail', pm.response.json().email);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nuevo.proveedor.{{$timestamp}}@demo.servas\",\n  \"password\": \"Demo1234!\",\n  \"document_type\": \"CC\",\n  \"document_number\": \"{{$timestamp}}\",\n  \"first_name\": \"Nuevo\",\n  \"last_name\": \"Proveedor\",\n  \"birth_date\": \"1992-03-15\",\n  \"phone\": \"3115559900\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "EX-2 Verificar email con OTP",
+          "description": "Completar la variable de colección 'otpCode' con el código leído del log de la app o de Redis:\n  docker compose -f back/docker-compose.yml logs app\n  docker exec servas-redis redis-cli GET \"otp:email:{{otpEmail}}\"",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otpEmail}}\",\n  \"otp_code\": \"{{otpCode}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-email",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email"
+              ]
+            }
+          }
+        },
+        {
+          "name": "EX-3 Reenviar OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otpEmail}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-email/resend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email",
+                "resend"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

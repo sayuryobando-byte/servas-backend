@@ -1,0 +1,192 @@
+name: servas
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: servas-db
+    environment:
+      POSTGRES_DB: servas
+      POSTGRES_USER: ${DB_USER:-servas}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-servas}
+    ports:
+      - "5432:5432"
+    volumes:
+      - servas-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-servas} -d servas" ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: servas-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    container_name: servas-app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: ${DB_URL:-jdbc:postgresql://db:5432/servas}
+      DB_USER: ${DB_USER:-servas}
+      DB_PASSWORD: ${DB_PASSWORD:-servas}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      SEED_ENABLED: ${SEED_ENABLED:-true}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://localhost:8080/actuator/health/readiness" ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.115.0
+    container_name: servas-victoriametrics
+    depends_on:
+      - app
+    ports:
+      - "8428:8428"
+    command:
+      - "-retentionPeriod=${VM_RETENTION:-2w}"
+      - "-search.maxQueryDuration=30s"
+    volumes:
+      - servas-victoriametrics-data:/victoria-metrics-data
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8428/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.115.0
+    container_name: servas-vmagent
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+    ports:
+      - "8429:8429"
+    command:
+      - "-remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+      - "-promscrape.config=/etc/vmagent/prometheus.yml"
+      - "-enableTCP6=false"
+    volumes:
+      - ./config/vmagent/prometheus.yml:/etc/vmagent/prometheus.yml:ro
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8429/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:stable
+    container_name: servas-victorialogs
+    ports:
+      - "9428:9428"
+    command:
+      - "-retentionPeriod=${VL_RETENTION:-2w}"
+    volumes:
+      - servas-victorialogs-data:/victoria-logs-data
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9428/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  vector:
+    image: timberio/vector:0.41.1-alpine
+    container_name: servas-vector
+    restart: on-failure
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+    volumes:
+      - ./config/vector/vector.toml:/etc/vector/vector.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: [ "--config-toml", "/etc/vector/vector.toml" ]
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8686/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: servas-grafana
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+      victorialogs:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_METRICS_ENABLED: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - servas-grafana-data:/var/lib/grafana
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/api/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  sonar-db:
+    image: postgres:16-alpine
+    container_name: servas-sonar-db
+    environment:
+      POSTGRES_USER: ${SONAR_DB_USER:-sonar}
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD:-sonar}
+      POSTGRES_DB: sonar
+    volumes:
+      - servas-sonar-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${SONAR_DB_USER:-sonar} -d sonar" ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: servas-sonarqube
+    depends_on:
+      sonar-db:
+        condition: service_healthy
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+      SONAR_JDBC_URL: jdbc:postgresql://sonar-db:5432/sonar
+      SONAR_JDBC_USERNAME: ${SONAR_DB_USER:-sonar}
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:-sonar}
+    ports:
+      - "${SONAR_PORT:-9000}:9000"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/api/system/status || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  servas-db-data:
+  servas-victoriametrics-data:
+  servas-victorialogs-data:
+  servas-grafana-data:
+  servas-sonar-data:

@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://db:5432/servas}
+    username: ${DB_USER:servas}
+    password: ${DB_PASSWORD:servas}
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+app:
+  seed:
+    enabled: ${SEED_ENABLED:true}
+
+logging:
+  level:
+    com.servas: DEBUG
